@@ -3,9 +3,10 @@
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Media.Capture.h>
 #include <winrt/Windows.Media.Effects.h>
 
-struct MRCOptions
+struct MRCVideoOptions
 {
     bool enable;
     bool hologram_composition;
@@ -13,7 +14,8 @@ struct MRCOptions
     bool video_stabilization;
     bool blank_protected;
     bool show_mesh;
-    uint8_t _reserved[2];
+    bool shared;
+    uint8_t _reserved[1];
     float global_opacity;
     float output_width;
     float output_height;
@@ -25,7 +27,7 @@ struct MRCVideoEffect : winrt::implements<MRCVideoEffect, winrt::Windows::Media:
 {
     winrt::Windows::Foundation::Collections::PropertySet m_propertySet;
 
-    MRCVideoEffect(MRCOptions const& options);
+    MRCVideoEffect(MRCVideoOptions const& options);
 
     winrt::hstring ActivatableClassId();
     winrt::Windows::Foundation::Collections::IPropertySet Properties();

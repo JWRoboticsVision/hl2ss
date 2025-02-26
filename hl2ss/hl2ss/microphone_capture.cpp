@@ -1,166 +1,214 @@
 
-#include <mfapi.h>
+#include <mmdeviceapi.h>
+#include <AudioClient.h>
+#include "extended_execution.h"
 #include "microphone_capture.h"
-#include "timestamps.h"
-#include "types.h"
+#include "lock.h"
+#include "nfo.h"
 
-using namespace winrt::Windows::Media::Devices;
+class MicrophoneCapture : public winrt::implements<MicrophoneCapture, IActivateAudioInterfaceCompletionHandler>
+{
+private:
+	winrt::com_ptr<IAudioClient3> m_audio_client;
+	winrt::com_ptr<IAudioCaptureClient> m_audio_capture_client;
+	HANDLE m_event_data; // CloseHandle
+	HANDLE m_event_activate; // CloseHandle
+	bool m_raw;
+
+	HRESULT Configure(IActivateAudioInterfaceAsyncOperation* operation);
+	void Activate(); // Call from the main thread
+
+public:
+	MicrophoneCapture();
+	~MicrophoneCapture();
+
+	void Open(bool raw);
+	void Close();
+	bool Status();
+
+	void ExecuteSensorLoop(HOOK_MC_PROC pHookCallback, void* pHookParam, HANDLE event_stop);
+
+	// IActivateAudioInterfaceCompletionHandler Methods
+	STDMETHOD(ActivateCompleted)(IActivateAudioInterfaceAsyncOperation* operation);
+};
 
 //-----------------------------------------------------------------------------
-// MicrophoneCapture Methods
+// Global Variables
+//-----------------------------------------------------------------------------
+
+static winrt::com_ptr<MicrophoneCapture> g_mc;
+
+//-----------------------------------------------------------------------------
+// Functions
 //-----------------------------------------------------------------------------
 
 // OK
-MicrophoneCapture::MicrophoneCapture() :
-	m_audioClient(nullptr),
-	m_audioCaptureClient(nullptr),
-	m_wfx(nullptr),
-	m_eventActivate(NULL),
-	m_eventData(NULL)
+MicrophoneCapture::MicrophoneCapture()
 {
+	m_event_activate = CreateEvent(NULL, FALSE, FALSE, NULL);
+	m_event_data     = CreateEvent(NULL, FALSE, FALSE, NULL);
 }
 
 // OK
 MicrophoneCapture::~MicrophoneCapture()
 {
-	m_audioClient = nullptr;
-	m_audioCaptureClient = nullptr;
-	if (m_wfx) { CoTaskMemFree(m_wfx); }
-	if (m_eventActivate) { CloseHandle(m_eventActivate); }
-	if (m_eventData) { CloseHandle(m_eventData); }
+	CloseHandle(m_event_data);
+	CloseHandle(m_event_activate);
 }
 
 // OK
-bool MicrophoneCapture::Initialize()
+HRESULT MicrophoneCapture::Configure(IActivateAudioInterfaceAsyncOperation* operation)
 {
-	winrt::com_ptr<IActivateAudioInterfaceAsyncOperation> asyncOp;
-	HRESULT hr;
-
-	m_eventActivate = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-	if (!m_eventActivate) { return false; }
-
-	hr = ActivateAudioInterfaceAsync(MediaDevice::GetDefaultAudioCaptureId(AudioDeviceRole::Default).c_str(), __uuidof(IAudioClient3), nullptr, this, asyncOp.put());
-	if (FAILED(hr)) { return false; }
-
-	return true;
-}
-
-// OK
-HRESULT MicrophoneCapture::ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation)
-{
-	WORD const bitspersample = 16;
-	DWORD const samplerate = 48000;
-	WORD const channels = 2;
-	INT64 const buffer_length = 8 * HNS_BASE;
+	winrt::com_ptr<IUnknown> punkAudioInterface;
+	AudioClientProperties acp;
+	HRESULT activateStatus;
+	WAVEFORMATEX* m_wfx; // CoTaskMemFree
+	WAVEFORMATEXTENSIBLE* wfe;
 	UINT32 defaultPeriodInFrames;
 	UINT32 fundamentalPeriodInFrames;
 	UINT32 minPeriodInFrames;
 	UINT32 maxPeriodInFrames;
 
-	winrt::com_ptr<IUnknown> punkAudioInterface;
-	HRESULT activateStatus;
-	HRESULT hr;
-	WAVEFORMATEXTENSIBLE* wfe;
-	BOOL ok;
+	Cleaner log_error_microphone([=]() { ExtendedExecution_EnterException(Exception::Exception_AccessDeniedMicrophone); });
 
-	hr = operation->GetActivateResult(&activateStatus, punkAudioInterface.put());
-	if (FAILED(hr)) { return hr; }
-	if (FAILED(activateStatus)) { return activateStatus; }
+	operation->GetActivateResult(&activateStatus, punkAudioInterface.put());
 
-	m_audioClient = punkAudioInterface.as<IAudioClient3>();
+	m_audio_client = punkAudioInterface.as<IAudioClient3>();
 
-	hr = m_audioClient->GetMixFormat(&m_wfx);
-	if (FAILED(hr)) { return hr; }
+	if (m_raw)
+	{
+	acp.cbSize     = sizeof(AudioClientProperties);
+	acp.eCategory  = AUDIO_STREAM_CATEGORY::AudioCategory_Media;
+	acp.Options    = AUDCLNT_STREAMOPTIONS::AUDCLNT_STREAMOPTIONS_RAW;
+	acp.bIsOffload = FALSE;
+
+	m_audio_client->SetClientProperties(&acp);
+	}
+
+	m_audio_client->GetMixFormat(&m_wfx);
+
+	Cleaner free_wfx([=]() { CoTaskMemFree(m_wfx); });
 
 	wfe = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(m_wfx);
 
-	wfe->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-	wfe->Format.wBitsPerSample = bitspersample;
-	wfe->Format.nSamplesPerSec = samplerate;
-	wfe->Format.nChannels = channels;
-	wfe->Format.nBlockAlign = wfe->Format.nChannels * (wfe->Format.wBitsPerSample / 8);
-	wfe->Format.nAvgBytesPerSec = wfe->Format.nBlockAlign * wfe->Format.nSamplesPerSec;
+	if (!m_raw)
+	{
+	wfe->SubFormat                   = KSDATAFORMAT_SUBTYPE_PCM;
+	wfe->Format.wBitsPerSample       = 16;
+	wfe->Format.nBlockAlign          = wfe->Format.nChannels * (wfe->Format.wBitsPerSample / 8);
+	wfe->Format.nAvgBytesPerSec      = wfe->Format.nBlockAlign * wfe->Format.nSamplesPerSec;
 	wfe->Samples.wValidBitsPerSample = wfe->Format.wBitsPerSample;
+	}
+
+	m_audio_client->GetSharedModeEnginePeriod(m_wfx, &defaultPeriodInFrames, &fundamentalPeriodInFrames, &minPeriodInFrames, &maxPeriodInFrames);
+	activateStatus = m_audio_client->InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK, minPeriodInFrames, m_wfx, NULL);
+	if (FAILED(activateStatus)) { return activateStatus; }
+	m_audio_client->SetEventHandle(m_event_data);
 	
-	hr = m_audioClient->GetSharedModeEnginePeriod(m_wfx, &defaultPeriodInFrames, &fundamentalPeriodInFrames, &minPeriodInFrames, &maxPeriodInFrames);
-	if (FAILED(hr)) { return hr; }
+	m_audio_capture_client.capture(m_audio_client, &IAudioClient::GetService);
 
-	hr = m_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, buffer_length, 0, m_wfx, NULL);
-	if (FAILED(hr)) { return hr; }
-
-	m_eventData = CreateEvent(NULL, FALSE, FALSE, NULL);
-	if (!m_eventData) { return E_FAIL; }
-
-	hr = m_audioClient->SetEventHandle(m_eventData);
-	if (FAILED(hr)) { return hr; }
-
-	m_audioCaptureClient.capture(m_audioClient, &IAudioClient::GetService);
-
-	ok = SetEvent(m_eventActivate);
-	if (!ok) { return E_FAIL; }
+	log_error_microphone.Set(false);
 
 	return S_OK;
 }
 
 // OK
-bool MicrophoneCapture::WaitActivate(DWORD milliseconds)
+HRESULT MicrophoneCapture::ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation)
 {
-	return WaitForSingleObject(m_eventActivate, milliseconds) == WAIT_OBJECT_0;
+	HRESULT hr = Configure(operation);
+	SetEvent(m_event_activate);
+	return hr;
 }
 
 // OK
-void MicrophoneCapture::Start()
+void MicrophoneCapture::Activate()
 {
-	m_audioClient->Start();
+	winrt::com_ptr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+	ActivateAudioInterfaceAsync(GetBuiltInAudioCaptureId().c_str(), __uuidof(IAudioClient3), nullptr, this, asyncOp.put());
 }
 
 // OK
-void MicrophoneCapture::Stop()
+void MicrophoneCapture::Open(bool raw)
 {
-	m_audioClient->Stop();
-	m_audioClient->Reset();
+	m_raw = raw;
+	ExtendedExecution_RunOnMainThread([=]() { this->Activate(); });
+	WaitForSingleObject(m_event_activate, INFINITE);
 }
 
 // OK
-void MicrophoneCapture::WriteSample(IMFSinkWriter* pSinkWriter, DWORD dwAudioIndex)
+void MicrophoneCapture::Close()
 {
-	int const frame_duration_num = 625; // 10,000,000
-	int const frame_duration_den = 3;   //     48,000
+	m_audio_capture_client = nullptr;
+	m_audio_client         = nullptr;
+}
 
-	IMFSample* pSample; // Release
-	IMFMediaBuffer* pBuffer; // Release
-	UINT32 framesAvailable; // ReleaseBuffer
+// OK
+bool MicrophoneCapture::Status()
+{
+	return !!m_audio_capture_client;
+}
+
+// OK
+void MicrophoneCapture::ExecuteSensorLoop(HOOK_MC_PROC hook, void* param, HANDLE event_stop)
+{
+	UINT32 frames; // ReleaseBuffer
 	BYTE* data;
-	DWORD dwCaptureFlags;
-	int bytes;
-	BYTE* pDst;
+	DWORD flags;
 	UINT64 dps;
 	UINT64 qpc;
 
-	WaitForSingleObject(m_eventData, INFINITE);
+	m_audio_client->Start();
 
-	while (m_audioCaptureClient->GetBuffer(&data, &framesAvailable, &dwCaptureFlags, &dps, &qpc) == S_OK)
+	do
 	{
-	bytes = framesAvailable * m_wfx->nBlockAlign;
+	WaitForSingleObject(m_event_data, INFINITE);
 
-	MFCreateMemoryBuffer(bytes, &pBuffer);
-
-	pBuffer->Lock(&pDst, NULL, NULL);
-	if (dwCaptureFlags & AUDCLNT_BUFFERFLAGS_SILENT) { memset(pDst, 0, bytes); } else { memcpy(pDst, data, bytes); }
-	pBuffer->Unlock();
-	pBuffer->SetCurrentLength(bytes);
-
-	m_audioCaptureClient->ReleaseBuffer(framesAvailable);
-
-	MFCreateSample(&pSample);
-
-	pSample->AddBuffer(pBuffer);
-	pSample->SetSampleDuration((framesAvailable * frame_duration_num) / frame_duration_den);
-	pSample->SetSampleTime(qpc);
-
-	pSinkWriter->WriteSample(dwAudioIndex, pSample);
-
-	pBuffer->Release();
-	pSample->Release();
+	while (m_audio_capture_client->GetBuffer(&data, &frames, &flags, &dps, &qpc) == S_OK)
+	{
+    hook(data, frames, flags & AUDCLNT_BUFFERFLAGS_SILENT, qpc, param);
+	m_audio_capture_client->ReleaseBuffer(frames);
 	}
+	}
+	while(WaitForSingleObject(event_stop, 0) == WAIT_TIMEOUT);
+	
+	m_audio_client->Stop();
+	m_audio_client->Reset();
+
+	WaitForSingleObject(m_event_data, 0);
+}
+
+// OK
+void MicrophoneCapture_Startup()
+{
+	g_mc = winrt::make_self<MicrophoneCapture>();
+}
+
+// OK
+void MicrophoneCapture_Cleanup()
+{
+	g_mc = nullptr;
+}
+
+// OK
+void MicrophoneCapture_Open(bool raw)
+{	
+	g_mc->Open(raw);
+}
+
+// OK
+void MicrophoneCapture_Close()
+{
+	g_mc->Close();
+}
+
+// OK
+bool MicrophoneCapture_Status()
+{
+	return g_mc->Status();
+}
+
+// OK
+void MicrophoneCapture_ExecuteSensorLoop(HOOK_MC_PROC hook, void* param, HANDLE event_stop)
+{
+	g_mc->ExecuteSensorLoop(hook, param, event_stop);
 }

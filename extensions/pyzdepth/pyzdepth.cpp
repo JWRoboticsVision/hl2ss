@@ -1,13 +1,16 @@
 
 #define PY_SSIZE_T_CLEAN
+
 #include <Python.h>
 #include <zdepth.hpp>
 
-typedef struct
+typedef 
+struct
 {
     PyObject_HEAD
     zdepth::DepthCompressor zddc;
-} DepthCompressor;
+}
+DepthCompressor;
 
 PyObject *DepthCompressor_new(PyTypeObject *type, PyObject *, PyObject *)
 {
@@ -92,7 +95,7 @@ PyModuleDef DepthCompressor_module =
 {
     PyModuleDef_HEAD_INIT,
     "pyzdepth",
-    "Wrapper for zDepth",
+    "Wrapper for Zdepth",
     -1,
     NULL,
     NULL,

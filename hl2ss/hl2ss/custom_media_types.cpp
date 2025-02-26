@@ -3,6 +3,39 @@
 #include <codecapi.h>
 #include "custom_media_types.h"
 
+struct AVOption
+{
+    GUID guid;
+    uint32_t vt;
+};
+
+//-----------------------------------------------------------------------------
+// Global Variables
+//-----------------------------------------------------------------------------
+
+static AVOption const g_AVLUT[] =
+{
+    {CODECAPI_AVEncCommonRateControlMode, VT_UI4},
+    {CODECAPI_AVEncCommonQuality, VT_UI4},
+    {CODECAPI_AVEncAdaptiveMode, VT_UI4},
+    {CODECAPI_AVEncCommonBufferSize, VT_UI4},
+    {CODECAPI_AVEncCommonMaxBitRate, VT_UI4},
+    {CODECAPI_AVEncCommonMeanBitRate, VT_UI4},
+    {CODECAPI_AVEncCommonQualityVsSpeed, VT_UI4},
+    {CODECAPI_AVEncH264CABACEnable, VT_BOOL},
+    {CODECAPI_AVEncH264SPSID, VT_UI4},
+    {CODECAPI_AVEncMPVDefaultBPictureCount, VT_UI4},
+    {CODECAPI_AVEncMPVGOPSize, VT_UI4},
+    {CODECAPI_AVEncNumWorkerThreads, VT_UI4},
+    {CODECAPI_AVEncVideoContentType, VT_UI4},
+    {CODECAPI_AVEncVideoEncodeQP, VT_UI8},
+    {CODECAPI_AVEncVideoForceKeyFrame, VT_UI4},
+    {CODECAPI_AVEncVideoMinQP, VT_UI4},
+    {CODECAPI_AVLowLatencyMode, VT_BOOL},
+    {CODECAPI_AVEncVideoMaxQP, VT_UI4},
+    {CODECAPI_VideoEncoderDisplayContentType, VT_UI4},
+};
+
 //-----------------------------------------------------------------------------
 // Functions
 //-----------------------------------------------------------------------------
@@ -92,8 +125,11 @@ HRESULT CreateTypeAudio(IMFMediaType** ppType, uint32_t channels, uint32_t sampl
     case AACProfile::AACProfile_24000: return CreateTypeAAC(ppType, channels, samplerate, 24000, level);
     }
 
-    if (subtype == AudioSubtype::AudioSubtype_F32) { return CreateTypePCMF32(ppType, channels, samplerate); }
-    if (subtype == AudioSubtype::AudioSubtype_S16) { return CreateTypePCMS16(ppType, channels, samplerate); }
+    switch (subtype)
+    {
+    case AudioSubtype::AudioSubtype_F32: return CreateTypePCMF32(ppType, channels, samplerate);
+    case AudioSubtype::AudioSubtype_S16: return CreateTypePCMS16(ppType, channels, samplerate);
+    }
 
     *ppType = NULL;
 
@@ -196,6 +232,78 @@ static HRESULT CreateTypeARGB(IMFMediaType** ppType, uint32_t width, uint32_t he
     return S_OK;
 }
 
+// https://learn.microsoft.com/en-us/windows/win32/medfound/video-subtype-guids
+// OK
+static HRESULT CreateTypeYUY2(IMFMediaType** ppType, uint32_t width, uint32_t height, uint32_t stride, uint32_t fps_num, uint32_t fps_den)
+{
+    IMFMediaType* pType;
+
+    MFCreateMediaType(&pType);
+
+    pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    pType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YUY2);
+    pType->SetUINT32(MF_MT_DEFAULT_STRIDE, stride);
+    MFSetAttributeRatio(pType, MF_MT_FRAME_RATE, fps_num, fps_den);
+    MFSetAttributeSize(pType, MF_MT_FRAME_SIZE, width, height);
+    pType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlaceMode::MFVideoInterlace_Progressive);
+    pType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    MFSetAttributeRatio(pType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    pType->SetUINT32(MF_MT_SAMPLE_SIZE, 2UL * width * height);
+    pType->SetUINT32(MF_MT_FIXED_SIZE_SAMPLES, TRUE);
+
+    *ppType = pType;
+
+    return S_OK;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/medfound/video-subtype-guids
+// OK
+static HRESULT CreateTypeIYUV(IMFMediaType** ppType, uint32_t width, uint32_t height, uint32_t stride, uint32_t fps_num, uint32_t fps_den)
+{
+    IMFMediaType* pType;
+
+    MFCreateMediaType(&pType);
+
+    pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    pType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_IYUV);
+    pType->SetUINT32(MF_MT_DEFAULT_STRIDE, stride);
+    MFSetAttributeRatio(pType, MF_MT_FRAME_RATE, fps_num, fps_den);
+    MFSetAttributeSize(pType, MF_MT_FRAME_SIZE, width, height);
+    pType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlaceMode::MFVideoInterlace_Progressive);
+    pType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    MFSetAttributeRatio(pType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    pType->SetUINT32(MF_MT_SAMPLE_SIZE, (3UL * width * height) / 2UL);
+    pType->SetUINT32(MF_MT_FIXED_SIZE_SAMPLES, TRUE);
+
+    *ppType = pType;
+
+    return S_OK;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/medfound/video-subtype-guids
+// OK
+static HRESULT CreateTypeYV12(IMFMediaType** ppType, uint32_t width, uint32_t height, uint32_t stride, uint32_t fps_num, uint32_t fps_den)
+{
+    IMFMediaType* pType;
+
+    MFCreateMediaType(&pType);
+
+    pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    pType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YV12);
+    pType->SetUINT32(MF_MT_DEFAULT_STRIDE, stride);
+    MFSetAttributeRatio(pType, MF_MT_FRAME_RATE, fps_num, fps_den);
+    MFSetAttributeSize(pType, MF_MT_FRAME_SIZE, width, height);
+    pType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlaceMode::MFVideoInterlace_Progressive);
+    pType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    MFSetAttributeRatio(pType, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    pType->SetUINT32(MF_MT_SAMPLE_SIZE, (3UL * width * height) / 2UL);
+    pType->SetUINT32(MF_MT_FIXED_SIZE_SAMPLES, TRUE);
+
+    *ppType = pType;
+
+    return S_OK;
+}
+
 // https://docs.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder
 // OK
 static HRESULT CreateTypeH264(IMFMediaType** ppType, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, eAVEncH264VProfile profile, int32_t level, uint32_t bitrate)
@@ -251,12 +359,43 @@ HRESULT CreateTypeVideo(IMFMediaType** ppType, uint32_t width, uint32_t height, 
     case H26xProfile::H265Profile_Main: return CreateTypeHEVC(ppType, width, height, fps_num, fps_den, eAVEncH265VProfile::eAVEncH265VProfile_Main_420_8, level, bitrate);
     }
 
-    if (subtype == VideoSubtype::VideoSubtype_L8)   { return CreateTypeL8(  ppType, width, height, stride, fps_num, fps_den); }
-    if (subtype == VideoSubtype::VideoSubtype_L16)  { return CreateTypeL16( ppType, width, height, stride, fps_num, fps_den); }
-    if (subtype == VideoSubtype::VideoSubtype_NV12) { return CreateTypeNV12(ppType, width, height, stride, fps_num, fps_den); }
-    if (subtype == VideoSubtype::VideoSubtype_ARGB) { return CreateTypeARGB(ppType, width, height, stride, fps_num, fps_den); }
+    switch (subtype)
+    {
+    case VideoSubtype::VideoSubtype_L8:   return CreateTypeL8(  ppType, width, height, stride, fps_num, fps_den);
+    case VideoSubtype::VideoSubtype_L16:  return CreateTypeL16( ppType, width, height, stride, fps_num, fps_den);
+    case VideoSubtype::VideoSubtype_NV12: return CreateTypeNV12(ppType, width, height, stride, fps_num, fps_den);
+    case VideoSubtype::VideoSubtype_ARGB: return CreateTypeARGB(ppType, width, height, stride, fps_num, fps_den);
+    case VideoSubtype::VideoSubtype_YUY2: return CreateTypeYUY2(ppType, width, height, stride, fps_num, fps_den);
+    case VideoSubtype::VideoSubtype_IYUV: return CreateTypeIYUV(ppType, width, height, stride, fps_num, fps_den);
+    case VideoSubtype::VideoSubtype_YV12: return CreateTypeYV12(ppType, width, height, stride, fps_num, fps_den);
+    }
 
     *ppType = NULL;
 
     return E_INVALIDARG;
+}
+
+// OK
+void TranslateEncoderOptions(std::vector<uint64_t> const& options, IMFAttributes **pEncoderAttr)
+{
+	size_t size = options.size() & ~1ULL;
+
+	MFCreateAttributes(pEncoderAttr, static_cast<UINT32>(size / 2));
+
+	for (int i = 0; i < static_cast<int>(size); i += 2)
+	{
+	uint64_t option = options[i];
+	uint64_t value  = options[i + 1];
+
+	if (option >= (sizeof(g_AVLUT) / sizeof(AVOption))) { continue; }
+
+	AVOption entry = g_AVLUT[option];
+
+	switch (entry.vt)
+	{
+	case VT_UI4:  (*pEncoderAttr)->SetUINT32(entry.guid, static_cast<UINT32>(value));                  break;
+	case VT_UI8:  (*pEncoderAttr)->SetUINT64(entry.guid, value);                                       break;
+	case VT_BOOL: (*pEncoderAttr)->SetUINT32(entry.guid, (value == 0) ? VARIANT_FALSE : VARIANT_TRUE); break;
+	}
+	}
 }

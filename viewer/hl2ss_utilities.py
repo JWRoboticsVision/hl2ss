@@ -84,7 +84,7 @@ class wr_process_producer(mp.Process):
 
         while ((not self._stopping) or (self._frame_stamp < self._stop_stamp)):
             self._sink.acquire()
-            state, data = self._sink.get_buffered_frame(self._frame_stamp)
+            state, _, data = self._sink.get_buffered_frame(self._frame_stamp)
 
             if (state == 0):
                 self._frame_stamp += 1
@@ -335,6 +335,10 @@ def _create_csv_header_for_eet():
     return _create_csv_header_for_timestamp() + _create_csv_header_for_eet_payload() + _create_csv_header_for_pose()
 
 
+def _create_csv_header_for_extended_audio():
+    return _create_csv_header_for_timestamp()
+
+
 def _create_csv_row_for_timestamp(timestamp):
     return [str(timestamp)]
 
@@ -427,6 +431,10 @@ def _create_csv_row_for_eet(data):
     return _create_csv_row_for_timestamp(data.timestamp) + _create_csv_row_for_eet_payload(data.payload) + _create_csv_row_for_pose(data.pose)
 
 
+def _create_csv_row_for_extended_audio(data):
+    return _create_csv_row_for_timestamp(data.timestamp)
+
+
 def _create_csv_header(port):
     if (port == hl2ss.StreamPort.RM_VLC_LEFTFRONT):
         return _create_csv_header_for_rm_vlc()
@@ -454,6 +462,10 @@ def _create_csv_header(port):
         return _create_csv_header_for_si()
     if (port == hl2ss.StreamPort.EXTENDED_EYE_TRACKER):
         return _create_csv_header_for_eet()
+    if (port == hl2ss.StreamPort.EXTENDED_AUDIO):
+        return _create_csv_header_for_extended_audio()
+    if (port == hl2ss.StreamPort.EXTENDED_VIDEO):
+        return _create_csv_header_for_pv()
 
 
 def _create_csv_row(port, data):
@@ -489,6 +501,11 @@ def _create_csv_row(port, data):
     if (port == hl2ss.StreamPort.EXTENDED_EYE_TRACKER):
         data.payload = hl2ss.unpack_eet(data.payload)
         return _create_csv_row_for_eet(data)
+    if (port == hl2ss.StreamPort.EXTENDED_AUDIO):
+        return _create_csv_row_for_extended_audio(data)
+    if (port == hl2ss.StreamPort.EXTENDED_VIDEO):
+        data.payload = hl2ss.unpack_pv(data.payload)
+        return _create_csv_row_for_pv(data)
 
 
 def unpack_to_csv(input_filename, output_filename):    
@@ -526,6 +543,10 @@ def get_av_codec_name(port, profile):
         return hl2ss.get_video_codec_name(profile)
     if (port == hl2ss.StreamPort.MICROPHONE):
         return hl2ss.get_audio_codec_name(profile)
+    if (port == hl2ss.StreamPort.EXTENDED_AUDIO):
+        return hl2ss.get_audio_codec_name(profile)
+    if (port == hl2ss.StreamPort.EXTENDED_VIDEO):
+        return hl2ss.get_video_codec_name(profile)
 
 
 def get_av_framerate(port):
@@ -543,6 +564,8 @@ def get_av_framerate(port):
         return hl2ss.Parameters_RM_DEPTH_LONGTHROW.FPS
     if (port == hl2ss.StreamPort.MICROPHONE):
         return hl2ss.Parameters_MICROPHONE.SAMPLE_RATE
+    if (port == hl2ss.StreamPort.EXTENDED_AUDIO):
+        return hl2ss.Parameters_MICROPHONE.SAMPLE_RATE
 
 
 def unpack_to_mp4(input_filenames, output_filename):
@@ -557,10 +580,8 @@ def unpack_to_mp4(input_filenames, output_filename):
 
     for stream in streams:
         stream.time_base = time_base
-    for codec in codecs:
-        codec.time_base = time_base
 
-    base = 0#hl2ss._RANGEOF.U64_MAX
+    base = 0
 
     for reader in readers:
         data = reader.get_next_packet()
@@ -577,6 +598,8 @@ def unpack_to_mp4(input_filenames, output_filename):
                 break
 
             if (reader.port == hl2ss.StreamPort.PERSONAL_VIDEO):
+                payload = hl2ss.unpack_pv(data.payload).image
+            elif (reader.port == hl2ss.StreamPort.EXTENDED_VIDEO):
                 payload = hl2ss.unpack_pv(data.payload).image
             else:
                 payload = data.payload
